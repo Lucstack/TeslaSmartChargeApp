@@ -4,7 +4,8 @@
 // Import the necessary Firebase modules using the latest syntax.
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onDocumentUpdated } = require('firebase-functions/v2/firestore');
-const { onPost } = require('firebase-functions/v2/https');
+// CORRECTED: The correct function for HTTP triggers is onRequest.
+const { onRequest } = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
@@ -53,7 +54,8 @@ exports.calculateOptimalWindow = onDocumentUpdated(
  * [Function C] Receives real-time data from Tesla's Fleet Telemetry.
  * Trigger: HTTP POST request from Tesla's servers.
  */
-exports.telemetryWebhook = onPost(
+// CORRECTED: Use onRequest instead of onPost
+exports.telemetryWebhook = onRequest(
   { region: 'europe-west1' },
   async (req, res) => {
     // Function logic remains the same...
