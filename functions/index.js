@@ -1,26 +1,29 @@
 // This is the main file for your Cloud Functions.
 // It should be located at: /functions/index.js
 
-// Import the necessary Firebase modules using the latest syntax.
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
-const { onRequest, onCall } = require("firebase-functions/v2/https");
+// CORRECTED: HttpsError is imported directly
+const {
+  onRequest,
+  onCall,
+  HttpsError,
+} = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
-
-// Import modules for making API requests and parsing XML.
 const axios = require("axios");
 const xml2js = require("xml2js");
 
-// Initialize the Firebase Admin SDK.
 admin.initializeApp();
 const db = admin.firestore();
 
-// Define secrets for our API keys.
 const entsoeApiKey = defineSecret("ENTSOE_API_KEY");
 const teslaClientId = defineSecret("TESLA_CLIENT_ID");
 const teslaClientSecret = defineSecret("TESLA_CLIENT_SECRET");
+
+// CORRECTED: Defines the European API endpoint to be used everywhere
+const TESLA_API_BASE_URL = "https://fleet-api.prd.eu.vn.cloud.tesla.com";
 
 /**
  * [Function A] Fetches day-ahead electricity prices from the ENTSO-E API.
@@ -33,7 +36,6 @@ exports.fetchEnergyPrices = onSchedule(
     secrets: [entsoeApiKey],
   },
   async (event) => {
-    // This function's implementation is correct and remains unchanged.
     logger.info("Running fetchEnergyPrices function...");
     const REGION_CODE = "10YNL----------L";
     const ENTSOE_API_KEY = process.env.ENTSOE_API_KEY;
@@ -91,7 +93,6 @@ exports.fetchEnergyPrices = onSchedule(
 exports.calculateOptimalWindow = onDocumentUpdated(
   { document: "energy_prices/NL", region: "europe-west1" },
   async (event) => {
-    // This function's implementation is correct and remains unchanged.
     logger.info("Running calculateOptimalWindow function...");
     const hourlyRates = event.data.after.data().hourlyRates;
     if (!hourlyRates) return;
@@ -135,7 +136,6 @@ exports.calculateOptimalWindow = onDocumentUpdated(
 exports.telemetryWebhook = onRequest(
   { region: "europe-west1" },
   async (req, res) => {
-    // This function's implementation is correct and remains unchanged.
     const { vin, data } = req.body;
     if (!vin || !data) {
       res.status(400).send("Bad Request");
@@ -182,7 +182,6 @@ exports.manageChargingLogic = onDocumentUpdated(
     secrets: [teslaClientId, teslaClientSecret],
   },
   async (event) => {
-    // This function's implementation is correct and remains unchanged.
     const beforeData = event.data.before.data();
     const afterData = event.data.after.data();
     const userId = event.params.userId;
@@ -212,7 +211,7 @@ exports.manageChargingLogic = onDocumentUpdated(
       afterData.vehicle.isPluggedIn === true
     ) {
       logger.info(`Car plugged in for ${userId}. Running logic.`);
-      // ... (rest of the smart charging logic is correct)
+      // The rest of the smart charging logic can be added here.
     }
   }
 );
@@ -224,14 +223,14 @@ exports.exchangeAuthCodeForToken = onCall(
   { region: "europe-west1", secrets: [teslaClientId, teslaClientSecret] },
   async (request) => {
     if (!request.auth) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "unauthenticated",
         "The function must be called while authenticated."
       );
     }
     const authCode = request.data.code;
     if (!authCode) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "invalid-argument",
         'The function must be called with a "code" argument.'
       );
@@ -247,7 +246,7 @@ exports.exchangeAuthCodeForToken = onCall(
           client_id: teslaClientId.value(),
           client_secret: teslaClientSecret.value(),
           code: authCode,
-          audience: "https://fleet-api.prd.na.vn.cloud.tesla.com",
+          audience: TESLA_API_BASE_URL,
           redirect_uri: "https://teslasmartchargeapp.web.app/callback",
         }
       );
@@ -257,10 +256,8 @@ exports.exchangeAuthCodeForToken = onCall(
         throw new Error("Refresh token not found in Tesla response.");
       }
 
-      // --- NEW LOGIC: Fetch initial vehicle data ---
       const initialVehicleData = await getInitialVehicleData(refreshToken);
 
-      // Securely save the new token AND the initial vehicle data
       await db.collection("users").doc(userId).update({
         teslaRefreshToken: refreshToken,
         "vehicle.vin": initialVehicleData.vin,
@@ -277,20 +274,17 @@ exports.exchangeAuthCodeForToken = onCall(
         `Error exchanging auth code for user ${userId}:`,
         error.response ? error.response.data : error.message
       );
-      throw new functions.https.HttpsError(
-        "internal",
-        "Failed to connect to Tesla."
-      );
+      throw new HttpsError("internal", "Failed to connect to Tesla.");
     }
   }
 );
+
 /**
  * [Function F] Handles the OAuth redirect from Tesla.
  */
 exports.handleTeslaRedirect = onRequest(
   { region: "europe-west1" },
   (req, res) => {
-    // This function's implementation is correct and remains unchanged.
     const code = req.query.code;
     const state = req.query.state;
     if (!code) {
@@ -301,69 +295,52 @@ exports.handleTeslaRedirect = onRequest(
     res.redirect(redirectUrl);
   }
 );
-/**
 
 /**
  * [Function G] Fetches the latest vehicle data for an authenticated user.
- * Trigger: Called directly from the Flutter app (e.g., by a refresh button).
  */
 exports.refreshVehicleData = onCall(
   { region: "europe-west1", secrets: [teslaClientId, teslaClientSecret] },
   async (request) => {
     if (!request.auth) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "unauthenticated",
         "The function must be called while authenticated."
       );
     }
-
     const userId = request.auth.uid;
     logger.info(`Refreshing vehicle data for user ${userId}`);
-
     try {
-      // Get the user's document to find their refresh token
       const userDoc = await db.collection("users").doc(userId).get();
       if (!userDoc.exists) {
-        throw new functions.https.HttpsError("not-found", "User not found.");
+        throw new HttpsError("not-found", "User not found.");
       }
-
       const refreshToken = userDoc.data().teslaRefreshToken;
       if (!refreshToken || refreshToken === "NEEDS_TO_BE_SET_LATER") {
-        throw new functions.https.HttpsError(
+        throw new HttpsError(
           "failed-precondition",
           "Tesla account not connected."
         );
       }
-
-      // Call our existing helper function to get the latest data
       const latestVehicleData = await getInitialVehicleData(refreshToken);
-
-      // Update the vehicle data in Firestore
       await userDoc.ref.update({
         "vehicle.vin": latestVehicleData.vin,
         "vehicle.batteryLevel": latestVehicleData.batteryLevel,
         "vehicle.isPluggedIn": latestVehicleData.isPluggedIn,
       });
-
       logger.info(
         `Successfully refreshed and saved vehicle data for ${userId}`
       );
       return { success: true, message: "Vehicle data refreshed!" };
     } catch (error) {
       logger.error(`Error refreshing vehicle data for user ${userId}:`, error);
-      throw new functions.https.HttpsError(
-        "internal",
-        "Failed to refresh vehicle data."
-      );
+      throw new HttpsError("internal", "Failed to refresh vehicle data.");
     }
   }
 );
 
 // --- HELPER FUNCTIONS ---
 
-/**
- * Gets a new Tesla access token using the refresh token.
- */
 async function getTeslaAccessToken(refreshToken) {
   const response = await axios.post("https://auth.tesla.com/oauth2/v3/token", {
     grant_type: "refresh_token",
@@ -374,16 +351,11 @@ async function getTeslaAccessToken(refreshToken) {
   return response.data.access_token;
 }
 
-/**
- * --- NEW HELPER FUNCTION ---
- * Fetches the user's vehicle list and initial data.
- */
 async function getInitialVehicleData(refreshToken) {
   const accessToken = await getTeslaAccessToken(refreshToken);
 
-  // Get the list of vehicles
   const vehiclesResponse = await axios.get(
-    "https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles",
+    `${TESLA_API_BASE_URL}/api/1/vehicles`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
     }
@@ -396,31 +368,24 @@ async function getInitialVehicleData(refreshToken) {
     throw new Error("No vehicles found for this user.");
   }
 
-  // Use the first vehicle in the list
   const vehicle = vehiclesResponse.data.response[0];
   const vehicleId = vehicle.id_s;
-  const vin = vehicle.vin;
 
-  // Get detailed data for that specific vehicle
   const vehicleDataResponse = await axios.get(
-    `https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/vehicles/${vehicleId}/vehicle_data`,
+    `${TESLA_API_BASE_URL}/api/1/vehicles/${vehicleId}/vehicle_data`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
     }
   );
 
   const chargeState = vehicleDataResponse.data.response.charge_state;
-
   return {
-    vin: vin,
+    vin: vehicle.vin,
     batteryLevel: chargeState.battery_level,
     isPluggedIn: chargeState.charging_state !== "Disconnected",
   };
 }
 
-/**
- * Sends a start or stop charging command to a Tesla vehicle.
- */
 async function sendTeslaChargeCommand(refreshToken, vin, command) {
   try {
     const accessToken = await getTeslaAccessToken(refreshToken);
